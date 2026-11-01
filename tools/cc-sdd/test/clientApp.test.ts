@@ -112,3 +112,4 @@ describe('BND-SUPERVISION-INTEGRATION: Web Panel on port 3082', () => {
     expect(ticket.status).toBe('CANCELLED');
   });
 });
+

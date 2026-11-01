@@ -136,3 +136,4 @@ export class WorkerSlotsManager {
     this.releaseSlot(ticketId);
   }
 }
+

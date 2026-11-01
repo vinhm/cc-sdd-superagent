@@ -99,3 +99,4 @@ export class AssignmentManager {
       .run(asg.ticket_id, asg.executor_id);
   }
 }
+

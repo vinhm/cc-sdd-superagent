@@ -70,3 +70,4 @@ Bảng dưới đây quy định chính xác ánh xạ thư mục và tệp mã 
 | `BND-SUPERVISION-INTEGRATION` | `tools/cc-sdd/src/client/app.tsx` | Giao diện Web Panel trên cổng `3082` (6 thẻ: `Overview`, `Source`, `Trigger`, `Eval`, `Execution`, `Settings`). |
 | `BND-SUPERVISION-INTEGRATION` | `tools/cc-sdd/src/agents/registry.ts` | Cập nhật danh mục 8 coding agents với 2 preset `cc-sdd-router` và `cc-sdd-worker` cùng các tệp `manifests/{agent-id}.json`. |
 | `BND-SUPERVISION-INTEGRATION` | `tools/cc-sdd/templates/agents/*/skills/kiro-impl/SKILL.md` | Nâng cấp kịch bản kỹ năng `kiro-impl`, `kiro-discovery`, `kiro-review`, `kiro-debug` và bộ kiểm thử `test/realManifest*.test.ts`. |
+

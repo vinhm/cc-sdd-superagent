@@ -79,3 +79,4 @@ export class ConditionalAutoMerge {
     return { revoked };
   }
 }
+

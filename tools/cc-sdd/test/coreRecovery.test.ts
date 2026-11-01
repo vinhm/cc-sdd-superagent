@@ -86,3 +86,4 @@ describe('BND-STATE-ENGINE: 3-Step Crash Recovery & Tasks.md Projection', () => 
     expect(updatedTasksMd).toContain('* [ ] **1.3** Task 1.3 description');
   });
 });
+

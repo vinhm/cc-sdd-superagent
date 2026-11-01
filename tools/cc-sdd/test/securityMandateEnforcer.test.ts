@@ -87,3 +87,4 @@ describe('BND-CONTEXT-MANDATE: MandateEnforcer & Pre-LLM Mechanical Gate', () =>
     expect(check3.reason).toBeUndefined();
   });
 });
+

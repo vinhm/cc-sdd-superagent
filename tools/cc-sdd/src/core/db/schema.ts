@@ -180,3 +180,4 @@ export function initHarnessDatabase(dbPath: string): DatabaseSync {
 
   return db;
 }
+
