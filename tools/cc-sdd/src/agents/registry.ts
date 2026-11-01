@@ -15,6 +15,30 @@ export interface AgentCompletionGuide {
   appendSteps?: string[];
 }
 
+export interface AgentPresetConfig {
+  name: string;
+  role: 'router' | 'worker';
+  allowedTools: string[];
+  description: string;
+}
+
+export const defaultAgentPresets = {
+  router: {
+    name: 'cc-sdd-router',
+    role: 'router' as const,
+    allowedTools: ['read_file', 'glob', 'grep', 'agent', 'web_search'],
+    description:
+      'Specialized router preset: reads specs, performs DAG analysis, batches eval events, and dispatches tickets to workers. Never edits source code directly.',
+  },
+  worker: {
+    name: 'cc-sdd-worker',
+    role: 'worker' as const,
+    allowedTools: ['read_file', 'write_file', 'edit_file', 'bash', 'run_command', 'glob', 'grep'],
+    description:
+      'Specialized worker preset: isolated in git worktrees, implements TDD RED->GREEN cycles under immutable mandate boundaries.',
+  },
+};
+
 export interface AgentDefinition {
   label: string;
   description: string;
@@ -26,6 +50,7 @@ export interface AgentDefinition {
   completionGuide?: AgentCompletionGuide;
   templateFallbacks?: Record<string, string>;
   upgradeNotice?: string;
+  presets?: typeof defaultAgentPresets;
 }
 
 const makeUpgradeNotice = (flag: string): string =>
@@ -80,6 +105,7 @@ export const agentDefinitions = {
     manifestId: 'claude-code-agent',
   },
   'claude-code-skills': {
+    presets: defaultAgentPresets,
     label: 'Claude Code Skills',
     description:
       'Installs kiro skills in `.claude/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and a CLAUDE.md quickstart.',
@@ -128,6 +154,7 @@ export const agentDefinitions = {
     manifestId: 'codex',
   },
   'codex-skills': {
+    presets: defaultAgentPresets,
     label: 'Codex Skills',
     description:
       'Installs kiro skills in `.agents/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and an AGENTS.md quickstart.',
@@ -173,6 +200,7 @@ export const agentDefinitions = {
     manifestId: 'cursor',
   },
   'cursor-skills': {
+    presets: defaultAgentPresets,
     label: 'Cursor Skills',
     description:
       'Installs kiro skills in `.cursor/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and an AGENTS.md quickstart.',
@@ -218,6 +246,7 @@ export const agentDefinitions = {
     manifestId: 'github-copilot',
   },
   'github-copilot-skills': {
+    presets: defaultAgentPresets,
     label: 'GitHub Copilot Skills',
     description:
       'Installs kiro skills in `.github/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and an AGENTS.md quickstart.',
@@ -263,6 +292,7 @@ export const agentDefinitions = {
     manifestId: 'gemini-cli',
   },
   'gemini-cli-skills': {
+    presets: defaultAgentPresets,
     label: 'Gemini CLI Skills',
     description:
       'Installs kiro skills in `.gemini/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and a GEMINI.md quickstart.',
@@ -289,6 +319,7 @@ export const agentDefinitions = {
     manifestId: 'gemini-cli-skills',
   },
   'devin-skills': {
+    presets: defaultAgentPresets,
     label: 'Devin Local / CLI Skills',
     description:
       'Installs kiro skills for Devin Local in Devin Desktop and Devin CLI in `.devin/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and an AGENTS.md quickstart.',
@@ -419,6 +450,7 @@ export const agentDefinitions = {
     manifestId: 'opencode-agent',
   },
   'opencode-skills': {
+    presets: defaultAgentPresets,
     label: 'OpenCode Skills',
     description:
       'Installs kiro skills in `.opencode/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and an AGENTS.md quickstart.',
@@ -445,6 +477,7 @@ export const agentDefinitions = {
     manifestId: 'opencode-skills',
   },
   'antigravity-skills': {
+    presets: defaultAgentPresets,
     label: 'Antigravity Skills',
     description:
       'Installs kiro skills in `.agents/skills/kiro-*/`, shared settings in `{{KIRO_DIR}}/settings/`, and an AGENTS.md quickstart.',
@@ -468,6 +501,44 @@ export const agentDefinitions = {
       ],
     },
     manifestId: 'antigravity-skills',
+  },
+  'cc-sdd-router': {
+    label: 'CC-SDD Router',
+    description:
+      'Router preset: spec reading, DAG dependency analysis, Eval dynamic batching, and Ticket dispatching.',
+    aliasFlags: ['--router', '--sdd-router'],
+    recommendedModels: ['Router / planning: Gemini 3.8 Flash or Claude Opus 4.6'],
+    layout: {
+      commandsDir: '.kiro/router',
+      agentDir: '.kiro',
+      docFile: 'ROUTER.md',
+    },
+    commands: {
+      spec: '`/kiro-spec-init <what-to-build>`',
+      steering: '`/kiro-steering`',
+      steeringCustom: '`/kiro-steering-custom`',
+    },
+    presets: defaultAgentPresets,
+    manifestId: 'cc-sdd-router',
+  },
+  'cc-sdd-worker': {
+    label: 'CC-SDD Worker',
+    description:
+      'Worker preset: isolated git worktrees, immutable mandate enforcement, and feature-flag TDD execution.',
+    aliasFlags: ['--worker', '--sdd-worker'],
+    recommendedModels: ['Worker / TDD: Gemini 3.8 Flash or Claude Sonnet 4.6'],
+    layout: {
+      commandsDir: '.kiro/worker',
+      agentDir: '.kiro',
+      docFile: 'WORKER.md',
+    },
+    commands: {
+      spec: '`/kiro-impl`',
+      steering: '`/kiro-steering`',
+      steeringCustom: '`/kiro-steering-custom`',
+    },
+    presets: defaultAgentPresets,
+    manifestId: 'cc-sdd-worker',
   },
 } as const satisfies Record<string, AgentDefinition>;
 

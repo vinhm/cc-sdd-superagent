@@ -27,6 +27,15 @@ You operate in two modes:
 - Also accept clear natural-language opt-outs such as `skip review` or `without review` as `off`
 - If the request is ambiguous, keep `required`
 
+## Architecture (V4 Router-Worker Engine)
+- **Router-Worker Separation (REQ-SPD-01)**:
+  - `cc-sdd-router`: Read-only coordination preset. Analyzes tasks DAG, batches eval events, schedules parallel `(P)` waves, and allocates `WorkerSlots`. Never modifies source code directly.
+  - `cc-sdd-worker`: Isolated TDD execution preset. Runs in isolated git worktrees (`.kiro/worktrees/<task>`), executes RED->GREEN test cycles, strictly bounded by `MandateEnforcer` and monitored by `SemanticWatchdog`.
+- **Parallel Dispatch & Worktrees (REQ-SPD-02)**: Tasks marked with `(P)` whose dependencies `_Depends:_` are fulfilled are dispatched concurrently to separate worker slots and worktrees.
+- **WorkerSlots Concurrency**: Manages worker pool with `maxWorkers` slots, plus 1 reserved priority slot for human follow-ups (`maxWorkers + 1`).
+- **Async Backgrounding**: Shell commands taking >5000ms transition to async background processes via `AsyncShellRunner`.
+- **Direct Event Routing (REQ-TOK-01)**: Review verdicts, test outputs, and debugging cycles route directly to the active worker via `SubscriptionBus` without re-evaluating the parent router.
+
 ## Execution Steps
 
 ### Step 1: Gather Context
