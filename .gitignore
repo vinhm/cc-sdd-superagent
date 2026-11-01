@@ -91,3 +91,7 @@ docs/kiro/
 
 # Local dev tooling (not part of the project)
 .entire/
+
+.superpowers/
+.kiro/worktrees/
+.kiro/state/

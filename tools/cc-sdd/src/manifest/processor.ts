@@ -52,7 +52,8 @@ const shouldIncludeForOs = (art: ManifestArtifact, os: OSType): boolean => {
   return cond === os;
 };
 
-const applyPlaceholders = (input: string, agent: AgentType, ctx: TemplateContext): string => {
+const applyPlaceholders = (input: string | undefined, agent: AgentType, ctx: TemplateContext): string => {
+  if (!input) return '';
   const dict: Record<string, string> = {
     AGENT: agent,
     LANG_CODE: ctx.LANG_CODE,

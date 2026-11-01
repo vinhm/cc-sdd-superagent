@@ -172,7 +172,7 @@ describe('plan executor', () => {
       };
 
       const res = await executeProcessedArtifacts(items, resolved, { cwd, templatesRoot, onConflict });
-      expect(conflictPath).toBe('out/file.txt');
+      expect(conflictPath?.replace(/\\/g, '/')).toBe('out/file.txt');
       expect(res.written).toBeGreaterThan(0);
       expect(await fileContent(out)).toBe('NEW');
     });
@@ -311,3 +311,4 @@ describe('plan executor', () => {
     await expect(executeProcessedArtifacts(items, resolved, { cwd, templatesRoot })).rejects.toThrow(/symlink/i);
   });
 });
+

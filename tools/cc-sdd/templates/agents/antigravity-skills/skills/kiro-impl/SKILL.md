@@ -1,260 +1,132 @@
 ---
 name: kiro-impl
-description: Implement approved tasks using TDD with subagent dispatch. Runs all pending tasks autonomously or selected tasks manually.
+version: 4.0.0
+role_profile: hybrid-router-worker
+header_dependencies:
+  - .kiro/steering/product.md
+  - .kiro/steering/tech.md
+  - .kiro/steering/structure.md
+  - .kiro/specs/{feature}/spec.json
+  - .kiro/specs/{feature}/design.md#file-structure-plan
+  - .kiro/specs/{feature}/tasks.md
+context_mode: inline-spill-chained-recall
+mandate_enforcement: strict-tool-adapter
+state_backend: .kiro/state/harness.db
+description: Implement approved tasks using TDD with native subagent dispatch. Runs all pending tasks autonomously or selected tasks manually.
 ---
 
+# Kiro Implementation Skill (v4.0 Super-Harness Router–Worker Protocol)
 
-# kiro-impl Skill
+## 1. Static Core Invariants (KV Prefix Cache Locked)
+1. **Attention Conservation:** Consume as little human attention as possible while delivering verified software. Only interrupt humans on scope violations, ambiguous spec requirements, or changes exceeding 200 lines.
+2. **Immutable Mandate Enforcement:** The `_Boundary:_` annotation in `tasks.md` and the *File Structure Plan* in `design.md` compile into an immutable `Mandate`. Incoming comments, test logs, or `## Implementation Notes` provide context only and NEVER expand your file-write authority.
+3. **Evidence Over Prose:** Never infer task completion from implementer prose. Completion requires mechanical exit code `0` from `TEST_COMMANDS`/`BUILD_COMMANDS`/`SMOKE_COMMANDS` and an explicit `APPROVED` verdict from `kiro-review` on actual `git diff`.
 
-<background_information>
+## Role & Modes
 You operate in two modes:
-- **Autonomous mode** (no task numbers): Dispatch a fresh sub-agent per task, with independent review after each
+- **Autonomous mode** (no task numbers): Router DAG wave scheduling + WorkerSlots dispatch to isolated git worktrees
 - **Manual mode** (task numbers provided): Execute selected tasks directly in the main context
 
+## Core Mission
 - **Success Criteria**:
   - All tests written before implementation code
   - Code passes all tests with no regressions
   - Tasks marked as completed in tasks.md
   - Implementation aligns with design and requirements
   - Task completion follows the selected review mode
-- **Review Mode**:
-  - Default is `required`
-  - Accept explicit forms: `--review required|inline|off`
-  - Also accept clear natural-language opt-outs such as `skip review` or `without review` as `off`
-  - If the request is ambiguous, keep `required`
-</background_information>
 
-<instructions>
+## Review Mode
+- Default review mode is `required` (Default is `required`)
+- Accept explicit forms: `--review required|inline|off`
+- Also accept clear natural-language opt-outs such as `skip review` or `without review` as `off`
+- If the request is ambiguous, keep `required`
+- If review mode is `off`, skip task-local review and proceed to verification gate
 
-## Step 1: Gather Context
+## Architecture (V4 Router-Worker Engine)
+- **Router-Worker Separation (REQ-SPD-01)**:
+  - `cc-sdd-router`: Read-only coordination preset. Analyzes tasks DAG, batches eval events, schedules parallel `(P)` waves, and allocates `WorkerSlots`. Never modifies source code directly.
+  - `cc-sdd-worker`: Isolated TDD execution preset. Runs in isolated git worktrees (`.kiro/worktrees/<feature>/task-<X-Y>`), executes RED->GREEN test cycles, strictly bounded by `MandateEnforcer` and monitored by `SemanticWatchdog`.
+- **Parallel Dispatch & Worktrees (REQ-SPD-02)**: Tasks marked with `(P)` whose dependencies `_Depends:_` are fulfilled are dispatched concurrently to separate worker slots and worktrees.
+- **WorkerSlots Concurrency**: Manages worker pool with `maxWorkers` slots, plus 1 reserved priority slot for human follow-ups (`maxWorkers + 1`).
+- **Async Backgrounding**: Shell commands taking >5000ms transition to async background processes via `AsyncShellRunner` (30-minute timeout per turn).
+- **Direct Event Routing (REQ-TOK-01)**: Review verdicts, test outputs, and debugging cycles route directly to the active worker via `SubscriptionBus` without re-evaluating the parent router.
 
-Reuse steering/spec context already available from conversation; load missing context below.
-Select skills for the current task even when steering/spec context is already available:
-- `{{KIRO_DIR}}/specs/{feature}/spec.json` and `tasks.md` for approvals, task selection, and dependencies
-- Referenced sections of `requirements.md` and `design.md`, expanding to related contracts as needed for the selected task
-- Core steering context: `product.md`, `tech.md`, `structure.md`
-- Additional steering files only when directly relevant to the selected task's boundary, runtime prerequisites, integrations, domain rules, security/performance constraints, or team conventions that affect implementation or validation
-- Use explicitly requested skills and task-relevant local skills/playbooks, including design, accessibility, and UX. Select by description and read only needed guidance, even for small tasks; preserve required checks and host/project rules.
+## 2. Mode A: Router Orchestration (`cc-sdd-router` — No File Edit Tools)
+When invoked as `/kiro-impl` (autonomous wave execution) or after a crash restart:
+1. **3-Step Crash Recovery Check:** Before dispatching, reconcile (a) `.kiro/state/harness.db` (`tickets` and `effects_queue` tables), (b) uncommitted files and `git log` inside existing `.kiro/worktrees/`, and (c) remote PR/branch state on GitHub. Resume interrupted tickets from their last recorded effect without repeating completed TDD phases.
+2. **DAG Wave Resolution:**
+   - Parse `tasks.md` for unchecked sub-tasks (`- [ ] X.Y`).
+   - Group all tasks marked with `(P)` whose `_Depends:_` prerequisites are `[x]` into a parallel execution wave.
+   - Respect `_Boundary:_` annotations to ensure disjoint work areas.
+3. **Pre-Allocated WorkerSlots Dispatch:**
+   - Reserve a slot in `WorkerSlots` (`maxWorkers` limit) BEFORE waking or spawning a `cc-sdd-worker` session.
+   - Maintain 1 dedicated overflow slot (`maxWorkers + 1`) strictly reserved for human follow-up messages.
+   - Provision an isolated workspace via `git worktree add .kiro/worktrees/{feature}/task-{X-Y}`.
+   - Bind a `Subscription` so all subsequent review, debug, and test events route directly to `worker-task-{X-Y}` without re-entering the Router.
+4. **Non-Disruptive Policy Updates:** If `.kiro/steering/*.md`, `requirements.md`, or `design.md` changes during execution, invalidate pending `Eval` items and emit a `policy-changed` event to active Workers; do NOT abruptly kill active Worker processes.
+5. **Dispatch Flow per Task**:
+   - Read `templates/implementer-prompt.md` and construct prompt with task description, boundary scope, and validation commands.
+   - Dispatch via **Agent tool** as a fresh subagent.
+   - **Strict Handoff Parsing**: Parse implementer status only from the exact `## Status Report` block and `- STATUS:` field (`READY_FOR_REVIEW | BLOCKED | NEEDS_CONTEXT`). If missing or prose, re-dispatch once.
+   - **Review Dispatch**:
+     - Read `templates/reviewer-prompt.md` and pass `REVIEW_PROTOCOL_PATH` pointing to `../kiro-review/SKILL.md`.
+     - Dispatch via **Agent tool** as a fresh subagent.
+     - Parse reviewer verdict only from the exact `## Review Verdict` block and `- VERDICT:` field (`APPROVED | REJECTED`).
+     - **Bounded Remediation**: Max 2 implementer re-dispatches per rejection, then dispatch debugger.
+   - **Debug Dispatch**:
+     - Triggered by `BLOCKED`, `NEEDS_CONTEXT` unresolved, or `REJECTED` after 2 remediation rounds.
+     - Read `templates/debugger-prompt.md` and pass `DEBUG_PROTOCOL_PATH` pointing to `../kiro-debug/SKILL.md`.
+     - Dispatch via **Agent tool** as a fresh subagent.
+     - Require a `## Debug Report` and parse its exact `- NEXT_ACTION:` field (`RETRY_TASK | BLOCK_TASK | STOP_FOR_HUMAN`).
+     - If `NEXT_ACTION: STOP_FOR_HUMAN` → append `_Blocked: <ROOT_CAUSE>_` to `tasks.md`, stop the feature run, and report that human review is required.
+     - **No Destructive Reset**: Never use `git checkout .`, `git reset --hard`, or similar destructive rollback inside the loop.
+     - Max 2 debug rounds per task.
+   - **Selective Commit**:
+     - Only after review returns `APPROVED`, apply `kiro-verify-completion` using fresh evidence from the current code state.
+     - Mark task `[x]` in `tasks.md`.
+     - Stage only the explicit files permitted by `Mandate`: `git add <file1> <file2>`. NEVER use `git add -A` or `git add .`.
 
-### Preflight
+## 3. Mode B: Worker Execution (`cc-sdd-worker` — Isolated Git Worktree)
+When executing an assigned `Ticket` (`task-X.Y`) inside your dedicated `git worktree`:
+1. **Budgeted Context Recall (`MasterAssessor`):** Do NOT load full spec files or monolithic `## Implementation Notes`. Read only the inline `_Boundary:_` payload and invoke `MasterAssessor` pagination cursors by Stable ID (`Task ID -> Boundary ID -> Design Section -> Note ID`) when deeper context is needed.
+2. **Feature-Flag TDD & 5-Second Async Shell:**
+   - Follow the **Feature Flag Protocol** for behavioral changes:
+     1. Add flag defaulting OFF.
+     2. RED: Write tests failing with flag OFF. Run tests and capture failing output (`RED_PHASE_OUTPUT`).
+     3. GREEN: Enable flag, implement minimal code strictly within files permitted by `Mandate` until tests pass.
+     4. Remove flag and confirm tests still pass.
+   - Any execution of `TEST_COMMANDS`, `BUILD_COMMANDS`, or `SMOKE_COMMANDS` exceeding 5 seconds automatically moves to a background job (`job_id`, 30-minute timeout per turn) via `AsyncShellRunner` so your session remains responsive to `Subscription` events.
+3. **Pre-LLM Mechanical Gate & Direct Review Loop:**
+   - Before invoking `kiro-review`, run the mechanical gate: verify test exit code is `0` and `git diff --name-only` contains zero out-of-mandate paths.
+   - Receive `kiro-review` and `kiro-debug` feedback directly via `Subscription`.
+   - Record each remediation attempt in the SQLite `Effects` queue for external semantic `Watchdog` monitoring.
+4. **Upstream Defect Handoff & Slot Release:**
+   - If passing TDD requires modifying a shared contract outside your `Mandate`, STOP immediately, call `handoff(reason: "UPSTREAM_DEFECT")` to `cc-sdd-router`, halt child subagents, and release your `WorkerSlots` slot immediately.
+5. **Idempotent Outbox & Conditional Auto-Merge:**
+   - Record intent in the SQLite `Effects` queue before committing or posting to GitHub. Embed hidden HTML message ID markers in `Outbox` comments (`<!-- cc-sdd-outbox: <id> -->`) and scan remote threads first to prevent duplicate reports after network retries.
+   - Project `[x]` back to `tasks.md` only after `kiro-verify-completion` succeeds.
+   - Enable conditional auto-merge ONLY if total changed lines `< 200`, human approval is present, and a separate merge account is configured; automatically retract auto-merge before pushing any new commits.
 
-**Validate approvals**:
-- Verify tasks are approved in spec.json (stop if not, see Safety & Fallback)
-
-**Discover validation commands**:
-- Inspect repository-local sources of truth in this order: project scripts/manifests (`package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml`, app manifests), task runners (`Makefile`, `justfile`), CI/workflow files, existing e2e/integration configs, then `README*`
-- Derive a canonical validation set for this repo: `TEST_COMMANDS`, `BUILD_COMMANDS`, and `SMOKE_COMMANDS`
-- Prefer commands already used by repo automation over ad hoc shell pipelines
-- For `SMOKE_COMMANDS`, choose the lightest trustworthy runtime-liveness check for the app shape (for example: root URL load, Electron launch, CLI `--help`, service health endpoint, mobile simulator/e2e harness if one already exists)
-- Keep the full command set in the parent context, and pass only the task-relevant subset to implementer and reviewer sub-agents
-
-**Establish repo baseline**:
-- Run `git status --porcelain` and note any pre-existing uncommitted changes
-
-## Step 2: Select Tasks & Determine Mode
-
-**Parse arguments**:
-- Extract feature name from `$1`
-- If task numbers provided in `$2` (e.g., "1.1" or "1,2,3"): **manual mode**
-- If no task numbers: **autonomous mode** (all pending tasks)
-- Determine review mode from the invocation:
-  - `--review required` or omitted → `required`
-  - `--review inline` → `inline`
-  - `--review off`, `skip review`, or `without review` → `off`
-
-**Build task queue**:
-- Read tasks.md, identify actionable sub-tasks (X.Y numbering like 1.1, 2.3)
-- Major tasks (1., 2.) are grouping headers, not execution units
-- Skip tasks with `_Blocked:_` annotation
-- For each selected task, check `_Depends:_` annotations -- verify referenced tasks are `[x]`
-- If prerequisites incomplete, execute them first or warn the user
-- Use `_Boundary:_` annotations to understand the task's component scope
-
-## Step 3: Execute Implementation
-
-### Autonomous Mode (sub-agent dispatch)
-
-**Iteration discipline**: Process exactly ONE sub-task (e.g., 1.1) per iteration. Do NOT batch multiple sub-tasks into a single sub-agent dispatch. Each iteration follows the full cycle: dispatch implementer → review → commit → re-read tasks.md → next.
-
-**Context management**: Re-read `tasks.md` before each iteration. Carry forward the task outcome, commit/evidence references, unresolved constraints, and relevant Implementation Notes; do not repeat completed worker transcripts in later handoffs.
-
-**Delegation scope**: Use native subagents for these task-local steps, passing the focused inputs below rather than the full parent conversation. Independent feature/PR chats and their worktrees are managed through the host; do not create a standalone chat for each implementation or review step.
-
-If multi-agent capability is available, for each task (one at a time):
-
-**a) Dispatch implementer**:
-- Read `templates/implementer-prompt.md` from this skill's directory
-- Construct a prompt by combining the template with task-specific context:
-  - Task description and boundary scope
-  - Paths to spec files: requirements.md, design.md, tasks.md
-  - Exact requirement and design section numbers this task must satisfy (using source numbering, NOT invented `REQ-*` aliases)
-  - Task-relevant steering context and parent-discovered validation commands (tests/build/smoke as relevant)
-  - Selected skill/playbook paths and concise task-relevant guidance, including required checks; inline necessary guidance when the worker cannot access those paths
-  - Whether the task is behavioral (Feature Flag Protocol) or non-behavioral
-  - **Previous learnings**: Include any `## Implementation Notes` entries from tasks.md that are relevant to this task's boundary or dependencies (e.g., "better-sqlite3 requires separate rebuild for Electron"). This prevents the same mistakes from recurring.
-- The implementer sub-agent will read the spec files and build its own Task Brief (acceptance criteria, completion definition, design constraints, verification method) before implementation
-- Preserve this task context, including selected skill guidance, on every implementer re-dispatch (context requests, review remediation, and debug retries); append the new context or feedback.
-- Spawn a fresh sub-agent with this prompt
-
-**b) Handle implementer status**:
-- Parse implementer status only from the exact `## Status Report` block and `- STATUS:` field.
-- If `STATUS` is missing, ambiguous, or replaced with prose, re-dispatch the implementer once requesting the exact structured status block only. Do NOT proceed to review without a parseable `READY_FOR_REVIEW | BLOCKED | NEEDS_CONTEXT` value.
-- **READY_FOR_REVIEW** → proceed to review
-- **BLOCKED** → dispatch debug subagent (see section below); do NOT immediately skip
-- **NEEDS_CONTEXT** → re-dispatch once with the requested additional context; if still unresolved → dispatch debug subagent
-
-**c) Review the task**:
-- If review mode is `required`:
-  - Read `templates/reviewer-prompt.md` from this skill's directory
-  - Resolve `../kiro-review/SKILL.md` relative to this skill's directory and pass its absolute path as `REVIEW_PROTOCOL_PATH`
-  - Construct a review prompt with:
-    - The task description and relevant spec section numbers
-    - Paths to spec files (requirements.md, design.md) so the reviewer can read them directly
-    - The implementer's status report (for reference only — reviewer must verify independently)
-  - The reviewer must apply the `kiro-review` protocol to this task-local review.
-  - Preserve the existing task-specific context: task text, spec refs, `_Boundary:_` scope, validation commands, implementer report, and the actual `git diff` as the primary source of truth.
-  - The reviewer sub-agent will run `git diff` itself to read the actual code changes and verify against the spec
-  - Spawn a fresh sub-agent with this prompt
-- If review mode is `inline`:
-  - Apply `kiro-review` in the parent context using the same task evidence and the actual `git diff`
-- If review mode is `off`:
-  - Skip task-local review
-  - Record in the parent context that task-local review was skipped for this task
-
-**d) Handle reviewer verdict**:
-- If review mode is `off`:
-  - Do not fabricate a reviewer verdict
-  - Before marking the task `[x]` or making any success claim, apply `kiro-verify-completion` using fresh evidence from the current code state; then mark task `[x]` in tasks.md and perform selective git commit
-- Otherwise:
-  - Parse reviewer verdict only from the exact `## Review Verdict` block and `- VERDICT:` field.
-  - If `VERDICT` is missing, ambiguous, or replaced with prose, re-dispatch the reviewer once requesting the exact structured verdict only. Do NOT mark the task complete, commit, or continue to the next task without a parseable `APPROVED | REJECTED` value.
-  - **APPROVED** → before marking the task `[x]` or making any success claim, apply `kiro-verify-completion` using fresh evidence from the current code state; then mark task `[x]` in tasks.md and perform selective git commit
-  - **REJECTED (round 1-2)** → re-dispatch implementer with review feedback
-  - **REJECTED (round 3)** → dispatch debug subagent (see section below)
-
-**e) Commit** (parent-only, selective staging):
-- Stage only the files actually changed for this task, plus tasks.md
-- **NEVER** use `git add -A` or `git add .`
-- Use `git add <file1> <file2> ...` with explicit file paths
-- Commit message format: `feat(<feature-name>): <task description>`
-
-**f) Record learnings**:
-- If this task revealed cross-cutting insights, append a one-line note to the `## Implementation Notes` section at the bottom of tasks.md
-
-**g) Debug subagent** (triggered by BLOCKED, NEEDS_CONTEXT unresolved, or REJECTED after 2 remediation rounds):
-
-- Read `templates/debugger-prompt.md` from this skill's directory
-- Resolve `../kiro-debug/SKILL.md` relative to this skill's directory and pass its absolute path as `DEBUG_PROTOCOL_PATH`
-- Supply the task brief/boundary, exact spec references, failure output, reviewer findings, current changed files/diff, and relevant Implementation Notes/runtime constraints
-- Include attempted fixes and their observed results concisely, without copying the failed workers' conversation history
-- Spawn a fresh sub-agent with these inputs; it reads the canonical `kiro-debug` procedure itself
-
-**Handle debug report**:
-- Require a `## Debug Report` and parse its exact `- NEXT_ACTION:` field (`RETRY_TASK | BLOCK_TASK | STOP_FOR_HUMAN`). If the protocol or a valid report is missing, stop this feature and report the missing input; do not guess a next action or dispatch another implementer.
-- If `NEXT_ACTION: STOP_FOR_HUMAN` → append `_Blocked: <ROOT_CAUSE>_` to tasks.md, stop the feature run, and report that human review is required before continuing
-- If `NEXT_ACTION: BLOCK_TASK` → append `_Blocked: <ROOT_CAUSE>_` to tasks.md, skip to next task
-- If `NEXT_ACTION: RETRY_TASK` → preserve the current worktree; do NOT reset or discard unrelated changes. Spawn a **new** implementer sub-agent with the original task context (including selected skill guidance), the debug report's `FIX_PLAN`, `NOTES`, and the current `git diff`, and require it to repair the task with explicit edits only
-  - If the new implementer succeeds (READY_FOR_REVIEW → reviewer APPROVED) → normal flow
-  - If the new implementer also fails → repeat debug cycle (max 2 debug rounds total). After 2 failed debug rounds → append `_Blocked: debug attempted twice, still failing — <ROOT_CAUSE>_` to tasks.md, skip
-- **Max 2 debug rounds per task**. Each round: fresh debug subagent → fresh implementer. If still failing after 2 rounds, the task is blocked.
-- Record debug findings in `## Implementation Notes` (this helps subsequent tasks avoid the same issue)
-
-**`(P)` markers**: Tasks marked `(P)` in tasks.md indicate they have no inter-dependencies and could theoretically run in parallel. However, kiro-impl processes them sequentially (one at a time) to avoid git conflicts and simplify review. The `(P)` marker is informational for task planning, not an execution directive.
-
-**Fallback**: If native subagent tools are unavailable or disabled in the current Antigravity session, execute all tasks sequentially in the main context using the manual mode execution flow below. Report that review was inline; do not present it as independent subagent review.
-
-### Manual Mode (main context)
-
-For each selected task:
-
-**1. Build Task Brief**:
-Before writing any code, read the relevant sections of requirements.md and design.md for this task and clarify:
-- What observable behaviors must be true when done (acceptance criteria)
-- What files/functions/tests must exist (completion definition)
-- What technical decisions to follow from design.md (design constraints)
-- How to confirm the task works (verification method)
-
-**2. Execute TDD cycle** (Kent Beck's RED → GREEN → REFACTOR):
-- **RED**: Write test for the next small piece of functionality based on the acceptance criteria. Test should fail.
-- **GREEN**: Implement simplest solution to make test pass, following the design constraints.
-- **REFACTOR**: Improve code structure, remove duplication. All tests must still pass.
-- **VERIFY**: All tests pass (new and existing), no regressions. Confirm verification method passes.
-- **REVIEW**:
-  - `required`: Apply `kiro-review` before marking the task complete. If the host supports fresh subagents in manual mode, use a fresh reviewer; otherwise perform the review in the main context using the `kiro-review` protocol. Do NOT continue until the verdict is parseably `APPROVED`.
-  - `inline`: Apply `kiro-review` in the main context before marking the task complete.
-  - `off`: Skip task-local review, but note that `kiro-validate-impl` becomes the primary quality gate before any feature-level completion claim.
-- **MARK COMPLETE**:
-  - `required|inline`: Only after review returns `APPROVED`, apply `kiro-verify-completion`, then update the checkbox from `- [ ]` to `- [x]` in tasks.md.
-  - `off`: Apply `kiro-verify-completion`, then update the checkbox from `- [ ]` to `- [x]` in tasks.md.
+## Manual Mode (main context)
+When task numbers are provided (e.g., `/kiro-impl 1.1`):
+1. **Build Task Brief**: Synthesize acceptance criteria, completion definition, design constraints, and verification method from the relevant spec sections.
+2. **Execute TDD Cycle**: RED → GREEN → REFACTOR.
+3. **Review**:
+   - `required`: Apply `kiro-review` before marking complete.
+   - `inline`: Apply `kiro-review` in main context.
+   - `off`: If review mode is `off`, skip review and proceed directly to completion verification.
+4. **Mark Complete**: Only after review returns `APPROVED` (or after verification if review is off), apply `kiro-verify-completion`, then update checkbox from `- [ ]` to `- [x]` in `tasks.md`.
 
 ## Step 4: Final Validation
-
-**Autonomous mode**:
-- After all tasks complete, run `/kiro-validate-impl $1` as a GO/NO-GO gate
-- If validation returns GO → before reporting feature success, apply `kiro-verify-completion` to the feature-level claim using the validation result and fresh supporting evidence
-- If validation returns NO-GO:
-  - Fix only concrete findings from the validation report
-  - Cap remediation at 3 rounds; if still NO-GO, stop and report remaining findings
-- If validation returns MANUAL_VERIFY_REQUIRED → stop and report the missing verification step
-
-**Manual mode**:
-- Suggest running `/kiro-validate-impl $1` but do not auto-execute
-- If review mode is `off`, treat `/kiro-validate-impl $1` as mandatory before any feature-level success claim
-
-## Feature Flag Protocol
-
-For tasks that add or change behavior, enforce RED → GREEN with a feature flag:
-
-1. **Add flag** (OFF by default): Introduce a toggle appropriate to the codebase (env var, config constant, boolean, conditional)
-2. **RED -- flag OFF**: Write tests for the new behavior. Run tests → must FAIL. If tests pass with flag OFF, the tests are not testing the right thing. Rewrite.
-3. **GREEN -- flag ON + implement**: Enable the flag, write implementation. Run tests → must PASS.
-4. **Remove flag**: Make the code unconditional. Run tests → must still PASS.
-
-**Skip this protocol for**: refactoring, configuration, documentation, or tasks with no behavioral change.
-
-</instructions>
-
-## Critical Constraints
-- **Strict Handoff Parsing**: Never infer implementer `STATUS` or reviewer `VERDICT` from surrounding prose; only the exact structured fields count
-- **No Destructive Reset**: Never use `git checkout .`, `git reset --hard`, or similar destructive rollback inside the implementation loop
-- **Selective Staging**: NEVER use `git add -A` or `git add .`; always stage explicit file paths
-- **Bounded Review Rounds**: Max 2 implementer re-dispatch rounds per reviewer rejection, then debug
-- **Bounded Debug**: Max 2 debug rounds per task (debug + re-implementation per round); if still failing → BLOCKED
-- **Bounded Remediation**: Cap final-validation remediation at 3 rounds
-
-## Output Description
-
-**Autonomous mode**: For each task, report: task ID, implementer status, reviewer verdict, files changed, commit hash. After all tasks: final validation result.
-
-**Manual mode**: Tasks executed with test results. Status of completed/remaining tasks.
-
-**Format**: Concise, in the language specified in spec.json.
+- Run `/kiro-validate-impl {feature}` as a GO/NO-GO gate.
+- If validation returns GO → apply `kiro-verify-completion` before reporting feature success.
+- If validation returns NO-GO: Fix only concrete findings from the validation report. Cap remediation at 3 rounds; if still NO-GO, stop and report remaining findings.
+- If validation returns MANUAL_VERIFY_REQUIRED → stop and report the missing verification step.
 
 ## Safety & Fallback
-
-### Error Scenarios
-
-**Tasks Not Approved or Missing Spec Files**:
-- **Stop Execution**: All spec files must exist and tasks must be approved
-- **Suggested Action**: "Complete previous phases: `/kiro-spec-requirements`, `/kiro-spec-design`, `/kiro-spec-tasks`"
-
-**Test Failures**:
-- **Stop Implementation**: Fix failing tests before continuing
-- **Action**: Debug and fix, then re-run
-
-**All Tasks Blocked**:
-- Stop and report all blocked tasks with reasons; human review needed
-
-**Spec Conflicts with Reality**:
-- Block the task with `_Blocked: <reason>_` -- do not silently work around it
-
-**Upstream Ownership Detected**:
-- If review, debug, or validation shows that the root cause belongs to an upstream, foundation, shared-platform, or dependency spec, do not patch around it inside the downstream feature
-- Route the fix back to the owning upstream spec, keep the downstream task blocked until that contract is repaired, and re-run validation/smoke for dependent specs after the upstream fix lands
-
-**Task Plan Invalidated During Implementation**:
-- If debug returns `NEXT_ACTION: STOP_FOR_HUMAN` because of task ordering, boundary, or decomposition problems, stop and return for human review of `tasks.md` or the approved plan instead of forcing a code workaround
-
-**Session Interrupted**:
-- Safe to re-run `/kiro-impl $1` — completed tasks are already `[x]` in tasks.md and committed to git
-- The controller re-reads tasks.md on each iteration, so it will pick up where it left off automatically
+- **Tasks Not Approved**: Stop execution if spec.json approvals are missing.
+- **Test Failures**: Fix failing tests before continuing.
+- **All Tasks Blocked**: Stop and report all blocked tasks with reasons; human review needed to resolve blockers.
+- **Spec Conflicts with Reality**: Block the task with `_Blocked: <reason>_` -- do not silently work around it.
+- **Upstream Ownership Detected**: Route fix back to owning upstream spec, keep downstream task blocked.
+- **Task Plan Invalidated During Implementation**: If debug returns `NEXT_ACTION: STOP_FOR_HUMAN`, stop and return for human review of `tasks.md`.

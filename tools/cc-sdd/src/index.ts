@@ -38,6 +38,8 @@ ${agentAliasLine}  --lang <ja|en|zh-TW|zh|es|pt|de|fr|ru|it|ko|ar|el|vi>  Langua
   --backup[=<dir>]                            Enable backup, optional dir
   --profile <full|minimal>                    Select template profile (default: full)
   --manifest <path>                           Manifest JSON path for planning
+  --panel                                     Launch cc-sdd Web Control Panel
+  --port <number>                             Web Panel port (default: 3082)
   --dry-run                                   Print plan only
   --yes, -y                                   Skip prompts (prompt -> force)
   -h, --help                                  Show help
@@ -225,6 +227,19 @@ export const runCli = async (
     return 1;
   }
 
+  if (parsedArgs.panel) {
+    const { initHarnessDatabase } = await import('./core/db/schema.js');
+    const { WebPanelServer } = await import('./client/app.js');
+    const kiroDir = parsedArgs.kiroDir ?? loadedConfig.kiroDir ?? '.kiro';
+    const dbPath = path.join(kiroDir, 'state', 'harness.db');
+    const db = initHarnessDatabase(dbPath);
+    const port = parsedArgs.port ?? 3082;
+    const server = new WebPanelServer(db, port);
+    await server.start();
+    io.log(formatSuccess('cc-sdd Super-Harness Web Panel running at http://localhost:' + port));
+    return 0;
+  }
+
   parsedArgs.agent = await ensureAgentSelection(parsedArgs.agent ?? loadedConfig.agent, io);
 
   if (parsedArgs.agent === 'codex') {
@@ -249,3 +264,24 @@ export const runCli = async (
 
   return runPlanExecution(manifestPath, resolved, io, execOpts);
 };
+
+
+// V4 Super-Harness Architecture Exports
+export * from './core/db/schema.js';
+export * from './core/naming.js';
+export * from './core/assignments.js';
+export * from './core/effects.js';
+export * from './core/recovery.js';
+export * from './security/mandateEnforcer.js';
+export * from './context/masterAssessor.js';
+export * from './context/subscriptionBus.js';
+export * from './execution/workerSlots.js';
+export * from './execution/worktreeManager.js';
+export * from './execution/asyncShell.js';
+export * from './execution/autoMerge.js';
+export * from './router/admission.js';
+export * from './router/evalBatcher.js';
+export * from './router/evalQueue.js';
+export * from './router/dagDispatcher.js';
+export * from './supervision/watchdog.js';
+export * from './client/app.js';
