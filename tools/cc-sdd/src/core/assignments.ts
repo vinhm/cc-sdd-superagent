@@ -12,7 +12,7 @@ export interface Assignment {
 }
 
 export class AssignmentManager {
-  constructor(private db: DatabaseSync) {}
+  constructor(private db: DatabaseSync) { }
 
   createAssignment(ticketId: string, executorId: string, worktreePath: string): Assignment {
     const id = `asg-${randomUUID()}`;
@@ -31,12 +31,20 @@ export class AssignmentManager {
     this.db.prepare("UPDATE tickets SET status = 'DISPATCHED', updated_at = ? WHERE id = ?").run(assignedAt, ticketId);
 
     if (ticket?.thread_id) {
-      const subId = `sub-${randomUUID()}`;
-      this.db
+      const hasSubscription = this.db
         .prepare(
-          'INSERT INTO subscriptions (id, thread_id, ticket_id, executor_id, active, created_at) VALUES (?, ?, ?, ?, 1, ?)'
+          'SELECT id FROM subscriptions WHERE thread_id = ? AND ticket_id = ? AND executor_id = ? AND active = 1 LIMIT 1'
         )
-        .run(subId, ticket.thread_id, ticketId, executorId, assignedAt);
+        .get(ticket.thread_id, ticketId, executorId);
+
+      if (!hasSubscription) {
+        const subId = `sub-${randomUUID()}`;
+        this.db
+          .prepare(
+            'INSERT INTO subscriptions (id, thread_id, ticket_id, executor_id, active, created_at) VALUES (?, ?, ?, ?, 1, ?)'
+          )
+          .run(subId, ticket.thread_id, ticketId, executorId, assignedAt);
+      }
     }
 
     return {

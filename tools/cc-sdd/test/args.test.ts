@@ -1,3 +1,10 @@
+console.log("ARGS TEST LOADED, describe is:", describe);
+try {
+  const res = describe('parseArgs', () => {});
+  console.log("describe returned:", res);
+} catch (e) {
+  console.log("describe threw:", e);
+}
 import { describe, it, expect } from 'vitest';
 import { parseArgs, type ParsedArgs } from '../src/cli/args';
 

@@ -1,5 +1,14 @@
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, mkdirSync, openSync, closeSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+  writeFileSync,
+  readFileSync,
+  statSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export class StateLockError extends Error {
@@ -13,6 +22,32 @@ export interface StateLock {
   release(): void;
 }
 
+/** Grace period for a lock file whose content cannot be parsed yet (e.g. mid-write by a live process). */
+const UNPARSEABLE_LOCK_GRACE_MS = 5_000;
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    // EPERM means the process exists but belongs to someone else.
+    return err.code === 'EPERM';
+  }
+}
+
+function isLockStale(lockPath: string): boolean {
+  try {
+    const pid = Number.parseInt(readFileSync(lockPath, 'utf8').split('\n')[0] ?? '', 10);
+    if (Number.isInteger(pid) && pid > 0) {
+      return !isProcessAlive(pid);
+    }
+    return Date.now() - statSync(lockPath).mtimeMs > UNPARSEABLE_LOCK_GRACE_MS;
+  } catch {
+    // The lock vanished between the EEXIST and the read: let the caller retry creation.
+    return true;
+  }
+}
+
 export function acquireStateLock(stateDir: string): StateLock {
   if (!existsSync(stateDir)) {
     mkdirSync(stateDir, { recursive: true });
@@ -21,14 +56,30 @@ export function acquireStateLock(stateDir: string): StateLock {
   const lockPath = join(stateDir, '.lock');
   let fd: number;
 
+  const tryCreate = (): number => {
+    const handle = openSync(lockPath, 'wx');
+    writeFileSync(handle, `${process.pid}\n${new Date().toISOString()}\n`);
+    return handle;
+  };
+
   try {
-    fd = openSync(lockPath, 'wx');
-    writeFileSync(fd, `${process.pid}\n${new Date().toISOString()}\n`);
+    fd = tryCreate();
   } catch (err: any) {
-    if (err.code === 'EEXIST') {
+    if (err.code !== 'EEXIST') throw err;
+
+    // A lock left behind by a crashed process must not block crash recovery.
+    if (!isLockStale(lockPath)) {
       throw new StateLockError(`State directory is locked by another process: ${lockPath}`);
     }
-    throw err;
+    try {
+      unlinkSync(lockPath);
+      fd = tryCreate();
+    } catch (retryErr: any) {
+      if (retryErr.code === 'EEXIST' || retryErr.code === 'ENOENT' || retryErr.code === 'EPERM') {
+        throw new StateLockError(`State directory is locked by another process: ${lockPath}`);
+      }
+      throw retryErr;
+    }
   }
 
   let released = false;
@@ -51,6 +102,40 @@ export function acquireStateLock(stateDir: string): StateLock {
       }
     },
   };
+}
+
+/**
+ * `context_chunks` is a derived index of the spec documents. Stable IDs are unique per `scope`
+ * (document or feature), not globally. Databases created before `scope` existed are rebuilt:
+ * the index can always be regenerated from the markdown sources.
+ */
+function migrateContextChunks(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(context_chunks)').all() as unknown as Array<{ name: string }>;
+  if (columns.length > 0 && !columns.some((c) => c.name === 'scope')) {
+    db.exec('DROP TABLE context_chunks;');
+  }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS context_chunks (
+      id TEXT PRIMARY KEY,
+      stable_id TEXT NOT NULL,
+      scope TEXT NOT NULL DEFAULT '',
+      source_file TEXT NOT NULL,
+      chunk_type TEXT NOT NULL,
+      content TEXT NOT NULL,
+      char_length INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(scope, stable_id)
+    );
+  `);
+}
+
+/** Adds the claim `status` column to `inbox_dedup` for databases created before it existed. */
+function migrateInboxDedup(db: DatabaseSync): void {
+  const columns = db.prepare('PRAGMA table_info(inbox_dedup)').all() as unknown as Array<{ name: string }>;
+  if (!columns.some((c) => c.name === 'status')) {
+    db.exec("ALTER TABLE inbox_dedup ADD COLUMN status TEXT NOT NULL DEFAULT 'DONE';");
+  }
 }
 
 export function initHarnessDatabase(dbPath: string): DatabaseSync {
@@ -167,16 +252,32 @@ export function initHarnessDatabase(dbPath: string): DatabaseSync {
       FOREIGN KEY(ticket_id) REFERENCES tickets(id)
     );
 
-    CREATE TABLE IF NOT EXISTS context_chunks (
+    CREATE TABLE IF NOT EXISTS eval_queue (
       id TEXT PRIMARY KEY,
-      stable_id TEXT NOT NULL UNIQUE,
-      source_file TEXT NOT NULL,
-      chunk_type TEXT NOT NULL,
-      content TEXT NOT NULL,
-      char_length INTEGER NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      thread_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      reason TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS executor_inbox (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      executor_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      ticket_id TEXT,
+      event_type TEXT NOT NULL,
+      payload TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      delivered_at TEXT,
+      UNIQUE(event_id, executor_id)
     );
   `);
+
+  migrateContextChunks(db);
+  migrateInboxDedup(db);
 
   return db;
 }

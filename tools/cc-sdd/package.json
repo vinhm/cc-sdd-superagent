@@ -25,6 +25,9 @@
   ],
   "author": "Gota",
   "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/gotalab/cc-sdd.git",

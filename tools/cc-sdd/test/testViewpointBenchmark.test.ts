@@ -41,7 +41,7 @@ describe('Performance Evaluation & Test Viewpoints (docs/test-viewpoint.md)', ()
       }
     }
     if (tmpDir) {
-      await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => { });
     }
   });
 
@@ -82,8 +82,8 @@ describe('Performance Evaluation & Test Viewpoints (docs/test-viewpoint.md)', ()
       const logs: string[] = [];
       const io = {
         log: (m: string) => logs.push(m),
-        error: () => {},
-        exit: () => {},
+        error: () => { },
+        exit: () => { },
       };
 
       // 1. Dry run for router
@@ -467,11 +467,11 @@ describe('Performance Evaluation & Test Viewpoints (docs/test-viewpoint.md)', ()
       queue.enqueue('tick-1', 'GITHUB_POST_COMMENT', { body: 'Fix implemented successfully' });
 
       // Step 2: Delivery deduplication prevents duplicate processing
-      const firstDelivery = await delivery.deliver('msg-unique-1', 'handler-1', () => {});
+      const firstDelivery = await delivery.deliver('msg-unique-1', 'handler-1', () => { });
       expect(firstDelivery.duplicate).toBe(false);
       expect(firstDelivery.processed).toBe(true);
 
-      const duplicateDelivery = await delivery.deliver('msg-unique-1', 'handler-1', () => {});
+      const duplicateDelivery = await delivery.deliver('msg-unique-1', 'handler-1', () => { });
       expect(duplicateDelivery.duplicate).toBe(true);
       expect(duplicateDelivery.processed).toBe(false);
 

@@ -66,7 +66,10 @@ export class WorkerSlotsManager {
       release: () => {
         if (released) return;
         released = true;
-        this.activeSlots.delete(ticketId);
+        // Only drop the map entry if it still belongs to this reservation.
+        if (this.activeSlots.get(ticketId) === reservation) {
+          this.activeSlots.delete(ticketId);
+        }
         if (isHumanPriority) {
           this.hasActiveHumanSlot = false;
         }
@@ -82,14 +85,23 @@ export class WorkerSlotsManager {
     return reservation;
   }
 
+  /** Resolves a queued request, reusing the ticket's live reservation if it already holds one. */
+  private grant(req: QueuedRequest, slotId: number): void {
+    const existing = this.activeSlots.get(req.ticketId);
+    if (existing) {
+      req.resolve(existing);
+      return;
+    }
+    req.resolve(this.createReservation(req.ticketId, slotId, req.isHumanPriority));
+  }
+
   private processQueue(): void {
     // 1. Process human priority requests first if human slot is free
     if (!this.hasActiveHumanSlot) {
       const humanIndex = this.queue.findIndex((q) => q.isHumanPriority);
       if (humanIndex !== -1) {
         const [humanReq] = this.queue.splice(humanIndex, 1);
-        const res = this.createReservation(humanReq.ticketId, this.config.maxWorkers + 1, true);
-        humanReq.resolve(res);
+        this.grant(humanReq, this.config.maxWorkers + 1);
       }
     }
 
@@ -99,13 +111,18 @@ export class WorkerSlotsManager {
       if (normalIndex === -1) break;
 
       const [normalReq] = this.queue.splice(normalIndex, 1);
-      const slotId = this.getNextAvailableNormalSlotId();
-      const res = this.createReservation(normalReq.ticketId, slotId, false);
-      normalReq.resolve(res);
+      this.grant(normalReq, this.getNextAvailableNormalSlotId());
     }
   }
 
   async reserveSlot(ticketId: string, isHumanPriority = false): Promise<WorkerSlotReservation> {
+    // A ticket that already holds a slot (e.g. a human follow-up on a running executor) keeps it:
+    // never create a second reservation for the same ticket.
+    const held = this.activeSlots.get(ticketId);
+    if (held) {
+      return held;
+    }
+
     if (isHumanPriority) {
       if (!this.hasActiveHumanSlot) {
         return this.createReservation(ticketId, this.config.maxWorkers + 1, true);
@@ -136,4 +153,3 @@ export class WorkerSlotsManager {
     this.releaseSlot(ticketId);
   }
 }
-

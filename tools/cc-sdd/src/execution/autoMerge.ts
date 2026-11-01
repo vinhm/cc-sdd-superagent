@@ -6,6 +6,7 @@ export interface PrMergeContext {
   testsPassed: boolean;
   authorAccount: string;
   mergerAccount: string;
+  approverAccount?: string;
 }
 
 export interface GitMergeClient {
@@ -19,6 +20,12 @@ export interface AutoMergeEligibility {
 }
 
 export class ConditionalAutoMerge {
+  private enabledPrs = new Set<number>();
+
+  isAutoMergeEnabled(prNumber: number): boolean {
+    return this.enabledPrs.has(prNumber);
+  }
+
   canAutoMerge(context: PrMergeContext): AutoMergeEligibility {
     const totalLines = context.additions + context.deletions;
 
@@ -33,6 +40,13 @@ export class ConditionalAutoMerge {
       return {
         eligible: false,
         reason: 'HUMAN_APPROVAL_REQUIRED: PR requires human approval before auto-merge.',
+      };
+    }
+
+    if (context.approverAccount && context.approverAccount === context.authorAccount) {
+      return {
+        eligible: false,
+        reason: 'APPROVER_CANNOT_BE_AUTHOR: Human approver account must be distinct from PR author account.',
       };
     }
 
@@ -64,6 +78,7 @@ export class ConditionalAutoMerge {
       throw new Error(`Cannot auto-merge PR #${context.prNumber}: ${check.reason}`);
     }
 
+    this.enabledPrs.add(context.prNumber);
     const merged = await client.merge(context.prNumber, context.mergerAccount);
     return {
       merged,
@@ -75,8 +90,10 @@ export class ConditionalAutoMerge {
     prNumber: number,
     client: GitMergeClient
   ): Promise<{ revoked: boolean }> {
+    this.enabledPrs.delete(prNumber);
     const revoked = await client.cancelAutoMerge(prNumber);
     return { revoked };
   }
 }
+
 

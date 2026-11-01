@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { posix } from 'node:path';
 
 export class MandateViolationError extends Error {
   constructor(message: string) {
@@ -8,73 +9,177 @@ export class MandateViolationError extends Error {
 }
 
 export interface Mandate {
-  id: string;
-  ticketId: string;
-  allowedFiles: readonly string[];
-  forbiddenFiles: readonly string[];
-  allowedCommands: readonly string[];
+  readonly id: string;
+  readonly ticketId: string;
+  readonly allowedFiles: readonly string[];
+  readonly forbiddenFiles: readonly string[];
+  readonly allowedCommands: readonly string[];
 }
 
 export function normalizeFilePath(p: string): string {
-  return p.replace(/\\/g, '/').replace(/^\.\//, '').trim();
+  const unified = p.replace(/\\/g, '/').trim();
+  if (unified.length === 0) return unified;
+  return posix.normalize(unified).replace(/^\.\//, '');
+}
+
+/**
+ * Converts a path requested by a tool call into a canonical workspace-relative path.
+ * Returns null when the path escapes the workspace (`..`) or is absolute and cannot be
+ * relativized, so that callers fail closed.
+ */
+export function resolveToolPath(p: string, workspaceRoot?: string): string | null {
+  let normalized = normalizeFilePath(p);
+  if (normalized.length === 0) return null;
+
+  const isAbsolute = normalized.startsWith('/') || /^[a-zA-Z]:\//.test(normalized);
+  if (isAbsolute) {
+    if (!workspaceRoot) return null;
+    const root = normalizeFilePath(workspaceRoot).replace(/\/+$/, '');
+    const caseInsensitive = /^[a-zA-Z]:\//.test(root);
+    const lhs = caseInsensitive ? normalized.toLowerCase() : normalized;
+    const rhs = caseInsensitive ? root.toLowerCase() : root;
+    if (lhs !== rhs && !lhs.startsWith(`${rhs}/`)) return null;
+    normalized = normalized.slice(root.length).replace(/^\/+/, '');
+    if (normalized.length === 0) return null;
+  }
+
+  if (normalized === '..' || normalized.startsWith('../') || normalized === '.') return null;
+  return normalized;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function globToRegex(pattern: string): RegExp {
+  let out = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '*') {
+      if (pattern[i + 1] === '*') {
+        out += '.*';
+        i++;
+      } else {
+        out += '[^/]*';
+      }
+    } else {
+      out += escapeRegex(ch);
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** Segment-aware match of a canonical path against a mandate pattern. */
+export function matchesMandatePattern(pattern: string, canonicalPath: string): boolean {
+  const pat = normalizeFilePath(pattern);
+
+  // Directory scope: `dir/*` or `dir/**` (or `dir/`) covers everything below `dir/`.
+  const dirMatch = pat.match(/^(.*?)\/(?:\*\*?)?$/);
+  if (dirMatch && !dirMatch[1].includes('*')) {
+    const base = dirMatch[1];
+    return canonicalPath === base || canonicalPath.startsWith(`${base}/`);
+  }
+
+  if (pat.includes('*')) {
+    return globToRegex(pat).test(canonicalPath);
+  }
+  return canonicalPath === pat;
+}
+
+export function isPathAllowedByMandate(mandate: Mandate, filePath: string, workspaceRoot?: string): boolean {
+  const canonical = resolveToolPath(filePath, workspaceRoot);
+  if (canonical === null) return false;
+  if (mandate.forbiddenFiles.some((pattern) => matchesMandatePattern(pattern, canonical))) return false;
+  return mandate.allowedFiles.some((pattern) => matchesMandatePattern(pattern, canonical));
+}
+
+const PATH_TOKEN_SPLIT = /[\s,;`()\[\]'"]+/;
+
+function looksLikePath(token: string): boolean {
+  if (token.length === 0) return false;
+  if (/^(BND|REQ|NOTE)-/.test(token)) return false;
+  if (token.includes('/')) return true;
+  return /\.[A-Za-z][A-Za-z0-9]*$/.test(token);
+}
+
+export interface CompileMandateOptions {
+  allowedCommands?: readonly string[];
+  forbiddenFiles?: readonly string[];
+}
+
+export const DEFAULT_ALLOWED_COMMANDS: readonly string[] = ['npm test', 'npm run build', 'git status', 'git diff'];
+
+/** Extracts file paths / globs mentioned in a `_Boundary:_` annotation (component names yield none). */
+export function extractBoundaryPaths(boundaryStr: string): string[] {
+  const paths = new Set<string>();
+  for (const raw of boundaryStr.split(PATH_TOKEN_SPLIT)) {
+    const token = raw.replace(/[.:]+$/, '');
+    if (looksLikePath(token)) {
+      const normalized = normalizeFilePath(token);
+      if (normalized.length > 0 && !normalized.startsWith('../')) paths.add(normalized);
+    }
+  }
+  return Array.from(paths);
 }
 
 export function compileMandateFromBoundary(
   ticketId: string,
   boundaryStr: string,
-  fileStructurePlan: string[] = []
+  fileStructurePlan: string[] = [],
+  options: CompileMandateOptions = {}
 ): Mandate {
-  const fileRegex = /([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9_\-]+)/g;
-  const matches = boundaryStr.match(fileRegex) || [];
-
-  const candidateFiles = new Set<string>();
-  for (const m of matches) {
-    // Ignore boundary labels like BND-STATE-ENGINE if matched
-    if (!m.startsWith('BND-') && !m.startsWith('REQ-') && m.includes('.')) {
-      candidateFiles.add(normalizeFilePath(m));
-    }
-  }
+  const candidateFiles = new Set<string>(extractBoundaryPaths(boundaryStr));
 
   for (const f of fileStructurePlan) {
-    candidateFiles.add(normalizeFilePath(f));
+    const normalized = normalizeFilePath(f);
+    if (normalized.length > 0 && !normalized.startsWith('../')) candidateFiles.add(normalized);
   }
 
-  const allowedFiles = Object.freeze(Array.from(candidateFiles));
-  const forbiddenFiles = Object.freeze([] as string[]);
-  const allowedCommands = Object.freeze(['npm test', 'npm run build', 'git status', 'git diff']);
-
-  return {
+  return Object.freeze({
     id: `mnd-${randomUUID()}`,
     ticketId,
-    allowedFiles,
-    forbiddenFiles,
-    allowedCommands,
-  };
+    allowedFiles: Object.freeze(Array.from(candidateFiles)),
+    forbiddenFiles: Object.freeze((options.forbiddenFiles ?? []).map(normalizeFilePath)),
+    allowedCommands: Object.freeze([...(options.allowedCommands ?? DEFAULT_ALLOWED_COMMANDS)]),
+  });
 }
+const SHELL_META = /[;&|`<>\r\n]|\$\(/;
 
 export class MandateEnforcer {
-  constructor(private readonly mandate: Mandate) {}
+  constructor(
+    private readonly mandate: Mandate,
+    private readonly workspaceRoot?: string
+  ) {}
 
   getMandate(): Mandate {
     return this.mandate;
   }
 
   interceptFileWrite(filePath: string): { allowed: boolean } {
-    const normalized = normalizeFilePath(filePath);
-
-    const isAllowed = this.mandate.allowedFiles.some((pattern) => {
-      if (pattern.endsWith('/*') || pattern.endsWith('/**')) {
-        const base = pattern.replace(/\/\*+$/, '');
-        return normalized.startsWith(base);
-      }
-      return normalized === pattern;
-    });
-
-    if (!isAllowed) {
+    if (!isPathAllowedByMandate(this.mandate, filePath, this.workspaceRoot)) {
+      const shown = resolveToolPath(filePath, this.workspaceRoot) ?? normalizeFilePath(filePath);
       throw new MandateViolationError(
-        `MANDATE_BOUNDARY_VIOLATION: Attempted to write to unauthorized file '${normalized}'. ` +
+        `MANDATE_BOUNDARY_VIOLATION: Attempted to write to unauthorized file '${shown}'. ` +
           `Allowed boundaries: [${this.mandate.allowedFiles.join(', ')}]. ` +
           `If this change is necessary, please call handoffToRouter(reason: "UPSTREAM_DEFECT_OR_SCOPE_EXPANSION").`
+      );
+    }
+
+    return { allowed: true };
+  }
+
+  interceptCommand(command: string): { allowed: boolean } {
+    const trimmed = command.trim().replace(/\s+/g, ' ');
+    const permitted =
+      trimmed.length > 0 &&
+      !SHELL_META.test(trimmed) &&
+      this.mandate.allowedCommands.some((allowed) => trimmed === allowed || trimmed.startsWith(`${allowed} `));
+
+    if (!permitted) {
+      throw new MandateViolationError(
+        `MANDATE_COMMAND_VIOLATION: Command '${trimmed}' is not permitted by the mandate. ` +
+          `Allowed commands: [${this.mandate.allowedCommands.join(', ')}]. ` +
+          `If this command is necessary, please call handoffToRouter(reason: "UPSTREAM_DEFECT_OR_SCOPE_EXPANSION").`
       );
     }
 
@@ -97,8 +202,9 @@ export class PreLlmReviewGate {
     testExitCode: number;
     modifiedFiles: string[];
     mandate: Mandate;
+    workspaceRoot?: string;
   }): ReviewGateEvaluation {
-    const { testExitCode, modifiedFiles, mandate } = options;
+    const { testExitCode, modifiedFiles, mandate, workspaceRoot } = options;
 
     if (testExitCode !== 0) {
       return {
@@ -108,19 +214,10 @@ export class PreLlmReviewGate {
     }
 
     for (const file of modifiedFiles) {
-      const normalized = normalizeFilePath(file);
-      const isAllowed = mandate.allowedFiles.some((pattern) => {
-        if (pattern.endsWith('/*') || pattern.endsWith('/**')) {
-          const base = pattern.replace(/\/\*+$/, '');
-          return normalized.startsWith(base);
-        }
-        return normalized === pattern;
-      });
-
-      if (!isAllowed) {
+      if (!isPathAllowedByMandate(mandate, file, workspaceRoot)) {
         return {
           canCallReview: false,
-          reason: `MANDATE_VIOLATION_IN_DIFF: Modified file '${normalized}' is outside mandate boundary.`,
+          reason: `MANDATE_VIOLATION_IN_DIFF: Modified file '${normalizeFilePath(file)}' is outside mandate boundary.`,
         };
       }
     }
@@ -130,4 +227,3 @@ export class PreLlmReviewGate {
     };
   }
 }
-

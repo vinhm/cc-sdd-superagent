@@ -15,6 +15,8 @@ export type ParsedArgs = {
   kiroDir?: string;
   manifest?: string;
   profile?: 'full' | 'minimal';
+  panel?: boolean;
+  port?: number;
 };
 
 const agentAliasMap = new Map<string, AgentType>();
@@ -36,9 +38,10 @@ const booleanFlags = new Set([
   'y',
   'dry-run',
   'backup',
+  'panel',
   ...agentAliasMap.keys(),
 ]);
-const valueFlags = new Set(['agent', 'lang', 'os', 'overwrite', 'kiro-dir', 'backup', 'manifest', 'profile']);
+const valueFlags = new Set(['agent', 'lang', 'os', 'overwrite', 'kiro-dir', 'backup', 'manifest', 'profile', 'port']);
 
 const isKnownFlag = (name: string): boolean => booleanFlags.has(name) || valueFlags.has(name);
 
@@ -140,6 +143,15 @@ export const parseArgs = (argv: string[]): ParsedArgs => {
         }
         case 'manifest': {
           out.manifest = String(value);
+          break;
+        }
+        case 'panel':
+          out.panel = true;
+          break;
+        case 'port': {
+          const num = Number.parseInt(String(value), 10);
+          if (Number.isNaN(num) || num <= 0 || num > 65535) throw new Error('port value invalid');
+          out.port = num;
           break;
         }
         case 'profile': {

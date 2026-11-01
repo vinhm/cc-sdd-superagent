@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { branchNameFor, worktreeDirNameFor } from '../core/naming.js';
 import { mkdirSync, existsSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
@@ -20,20 +21,39 @@ export class GitWorktreeManager {
     this.baseDir = worktreesBaseDir ?? join(repoRoot, '.kiro', 'worktrees');
   }
 
+  /**
+   * Creates (or resumes) the isolated worktree for a ticket. Idempotent so a crashed run can be
+   * resumed: an already registered worktree is returned as-is, and an existing branch whose worktree
+   * directory is gone is re-attached instead of failing on `-b`.
+   */
   async createWorktree(featureName: string, taskId: string): Promise<GitWorktreeInfo> {
-    const sanitizedTaskId = taskId.replace(/[^a-zA-Z0-9_\-]/g, '-');
-    const branchName = `sdd/${featureName}/task-${sanitizedTaskId}`;
-    const worktreePath = join(this.baseDir, featureName, `task-${sanitizedTaskId}`);
+    const branchName = branchNameFor(featureName, taskId);
+    const worktreePath = join(this.baseDir, featureName, worktreeDirNameFor(taskId));
 
     const parentDir = dirname(worktreePath);
     if (!existsSync(parentDir)) {
       mkdirSync(parentDir, { recursive: true });
     }
 
-    // Execute git worktree add
-    await execFileAsync('git', ['worktree', 'add', '-b', branchName, worktreePath], {
+    const normalize = (p: string) => resolve(p).replace(/\\/g, '/').toLowerCase();
+    const registered = (await this.listWorktrees()).some((w) => normalize(w.path) === normalize(worktreePath));
+    if (registered && existsSync(worktreePath)) {
+      return { worktreePath, branchName };
+    }
+
+    // Drop registrations whose directory disappeared (crash, manual deletion).
+    await execFileAsync('git', ['worktree', 'prune'], { cwd: this.repoRoot }).catch(() => {});
+
+    const branchExists = await execFileAsync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branchName}`], {
       cwd: this.repoRoot,
-    });
+    })
+      .then(() => true)
+      .catch(() => false);
+
+    const args = branchExists
+      ? ['worktree', 'add', worktreePath, branchName]
+      : ['worktree', 'add', '-b', branchName, worktreePath];
+    await execFileAsync('git', args, { cwd: this.repoRoot });
 
     return {
       worktreePath,
@@ -41,7 +61,11 @@ export class GitWorktreeManager {
     };
   }
 
-  async removeWorktree(worktreePath: string, force = false): Promise<void> {
+  /**
+   * Removes a worktree. When `branchName` is given the branch is deleted too, but only if it is fully
+   * merged (`git branch -d`) unless `force` is set; an unmerged branch is kept and reported.
+   */
+  async removeWorktree(worktreePath: string, force = false, branchName?: string): Promise<{ branchDeleted: boolean }> {
     const args = ['worktree', 'remove'];
     if (force) {
       args.push('--force');
@@ -57,6 +81,14 @@ export class GitWorktreeManager {
     }
 
     await execFileAsync('git', ['worktree', 'prune'], { cwd: this.repoRoot }).catch(() => {});
+
+    if (!branchName) return { branchDeleted: false };
+    const branchDeleted = await execFileAsync('git', ['branch', force ? '-D' : '-d', branchName], {
+      cwd: this.repoRoot,
+    })
+      .then(() => true)
+      .catch(() => false);
+    return { branchDeleted };
   }
 
   async listWorktrees(): Promise<Array<{ path: string; head: string; branch: string }>> {
