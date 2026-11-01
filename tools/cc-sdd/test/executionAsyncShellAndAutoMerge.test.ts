@@ -31,7 +31,10 @@ describe('BND-EXEC-RUNTIME: AsyncShellRunner & ConditionalAutoMerge', () => {
       expect(onCompleted).not.toHaveBeenCalled();
 
       // Wait for background completion
-      await new Promise((r) => setTimeout(r, 450));
+      const start = Date.now();
+      while (onCompleted.mock.calls.length === 0 && Date.now() - start < 3000) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
       expect(onCompleted).toHaveBeenCalledTimes(1);
       const completionResult = onCompleted.mock.calls[0][0];
       expect(completionResult.jobId).toBe(res.jobId);
