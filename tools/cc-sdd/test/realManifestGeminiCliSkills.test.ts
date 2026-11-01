@@ -96,8 +96,9 @@ describe('real gemini-cli-skills manifest', () => {
     // Gemini-specific: agents directory
     const geminiAgent = join(cwd, '.gemini/agents/spec-reviewer.md');
     expect(await exists(geminiAgent)).toBe(true);
-    const geminiAgentText = await readFile(geminiAgent, 'utf8');
-    expect(geminiAgentText).toMatch(/^---\nname: spec-reviewer\n/);
+    const rawText = await readFile(geminiAgent, 'utf8');
+    const geminiAgentText = rawText.replace(/\r\n/g, '\n');
+    expect(geminiAgentText.replace(/\r\n/g, '\n')).toMatch(/^---\nname: spec-reviewer\n/);
     expect(geminiAgentText).toContain('tools:\n  - read_file\n  - glob\n');
     expect(geminiAgentText).toContain('Use `glob` to find all spec files');
     expect(geminiAgentText).toContain('Use `read_file` to read each file found');
@@ -255,3 +256,5 @@ describe('real gemini-cli-skills manifest', () => {
     expect(reviewPromptText).toContain('The parent controller parses the exact `- VERDICT:` line');
   });
 });
+
+

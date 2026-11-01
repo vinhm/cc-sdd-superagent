@@ -23,7 +23,7 @@ describe('config store edge cases', () => {
   it('resolveConfigPath returns correct path', () => {
     const cwd = '/some/path';
     const configPath = resolveConfigPath(cwd);
-    expect(configPath).toBe('/some/path/.cc-sdd.json');
+    expect(configPath.replace(/\\/g, '/')).toBe('/some/path/.cc-sdd.json');
   });
 
   it('handles null config object in JSON', async () => {
